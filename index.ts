@@ -782,7 +782,7 @@ export function buildThinkingConfig(
 	// `display` to "omitted", which strips thinking text from the stream and
 	// corrupts tool_use partial_json delivery (TodoWrite "JSON parse error").
 	// Pin display to "summarized" per pi-mono acbf8eca.
-	if (modelId.startsWith("claude-opus-4-7")) {
+	if (modelId.includes("opus-4-7") || modelId.includes("opus-4-6") || modelId.includes("sonnet-4-6")) {
 		return {
 			thinking: { type: "adaptive", display: "summarized" },
 			maxTokens,
