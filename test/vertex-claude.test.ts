@@ -141,20 +141,22 @@ describe("vertex-claude helpers", () => {
 		expect(hasOpus47ApiRestrictions("claude-sonnet-4@20250514")).toBe(false);
 	});
 
-	it("returns extended thinking with budget and display=summarized for non-Opus-4.7 models", () => {
+	it("returns adaptive thinking for Opus 4.6", () => {
 		const result = buildThinkingConfig("claude-opus-4-6", "high", 32000);
-		expect(result.thinking).toEqual({ type: "enabled", budget_tokens: 20480, display: "summarized" });
+		expect(result.thinking).toEqual({ type: "adaptive", display: "summarized" });
 		expect(result.maxTokens).toBe(32000);
-		expect(result.effort).toBeUndefined();
+		expect(result.effort).toBe("high");
 	});
 
-	it("returns extended thinking for Sonnet 4.6", () => {
+	it("returns adaptive thinking for Sonnet 4.6", () => {
 		const result = buildThinkingConfig("claude-sonnet-4-6", "medium", 64000);
-		expect(result.thinking).toEqual({ type: "enabled", budget_tokens: 10240, display: "summarized" });
+		expect(result.thinking).toEqual({ type: "adaptive", display: "summarized" });
+		expect(result.maxTokens).toBe(64000);
+		expect(result.effort).toBe("medium");
 	});
 
 	it("adjusts maxTokens when budget exceeds it", () => {
-		const result = buildThinkingConfig("claude-opus-4-6", "high", 1000);
+		const result = buildThinkingConfig("claude-opus-4@20250514", "high", 1000);
 		expect(result.thinking).toEqual({ type: "enabled", budget_tokens: 20480, display: "summarized" });
 		expect(result.maxTokens).toBe(20480 + 1024);
 	});
@@ -165,7 +167,7 @@ describe("vertex-claude helpers", () => {
 	});
 
 	it("uses custom thinking budgets when provided", () => {
-		const result = buildThinkingConfig("claude-opus-4-6", "medium", 32000, { medium: 8000 });
+		const result = buildThinkingConfig("claude-opus-4@20250514", "medium", 32000, { medium: 8000 });
 		expect(result.thinking).toEqual({ type: "enabled", budget_tokens: 8000, display: "summarized" });
 	});
 

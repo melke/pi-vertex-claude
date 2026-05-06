@@ -754,8 +754,7 @@ export function hasOpus47ApiRestrictions(modelId: string): boolean {
 
 // Map pi-ai reasoning level to the Anthropic adaptive-thinking `effort` value.
 // Only Opus 4.7 supports "xhigh" on `output_config`; everything else caps at
-// "high". Older Opus 4.6 uses budget-based thinking in this provider, so its
-// "max" mapping lives in pi-mono but not here.
+// "high".
 export function mapReasoningToEffort(reasoning: string, modelId: string): ThinkingEffort {
 	switch (reasoning) {
 		case "minimal":
@@ -778,10 +777,10 @@ export function buildThinkingConfig(
 	maxTokens: number,
 	thinkingBudgets?: Record<string, number>,
 ): { thinking: ThinkingConfig; maxTokens: number; effort?: ThinkingEffort } {
-	// Opus 4.7 uses adaptive thinking. Anthropic silently changed its default
-	// `display` to "omitted", which strips thinking text from the stream and
-	// corrupts tool_use partial_json delivery (TodoWrite "JSON parse error").
-	// Pin display to "summarized" per pi-mono acbf8eca.
+	// Newer Opus/Sonnet models use adaptive thinking. Anthropic silently changed
+	// the default `display` to "omitted", which strips thinking text from the
+	// stream and corrupts tool_use partial_json delivery (TodoWrite "JSON parse
+	// error"). Pin display to "summarized" per pi-mono acbf8eca.
 	if (modelId.includes("opus-4-7") || modelId.includes("opus-4-6") || modelId.includes("sonnet-4-6")) {
 		return {
 			thinking: { type: "adaptive", display: "summarized" },
