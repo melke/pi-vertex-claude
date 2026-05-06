@@ -233,15 +233,49 @@ function resolveProjectId(settingsEnv?: SettingsEnv): { id: string; envVar: Proj
 	return undefined;
 }
 
-function resolveRegion(settingsEnv?: SettingsEnv): string {
+// Keep endpoint-affecting region config constrained to a single Google
+// Vertex-compatible DNS label. Without this, a repo-local
+// .claude/settings.local.json could inject dots, slashes, or other URL syntax
+// into the SDK's region-derived base URL.
+export function validateVertexRegion(region: string): string {
+	const normalized = region.trim();
+	if (
+		normalized === "global" ||
+		normalized === "us" ||
+		normalized === "eu" ||
+		/^[a-z][a-z0-9-]{0,50}[a-z0-9]$/.test(normalized)
+	) {
+		return normalized;
+	}
+
+	throw new Error(
+		`Invalid Vertex AI region "${region}". Use "global", "us", "eu", or a Google Cloud region like "us-east5".`,
+	);
+}
+
+export function resolveRegion(settingsEnv?: SettingsEnv): string {
 	const settings = settingsEnv ?? resolveSettingsEnv();
-	return (
+	const region =
 		process.env.GOOGLE_CLOUD_LOCATION ||
 		process.env.CLOUD_ML_REGION ||
 		settings.GOOGLE_CLOUD_LOCATION ||
 		settings.CLOUD_ML_REGION ||
-		"us-east5"
-	);
+		"us-east5";
+	return validateVertexRegion(region);
+}
+
+export function buildVertexBaseUrl(region: string): string {
+	const safeRegion = validateVertexRegion(region);
+	switch (safeRegion) {
+		case "global":
+			return "https://aiplatform.googleapis.com/v1";
+		case "us":
+			return "https://aiplatform.us.rep.googleapis.com/v1";
+		case "eu":
+			return "https://aiplatform.eu.rep.googleapis.com/v1";
+		default:
+			return `https://${safeRegion}-aiplatform.googleapis.com/v1`;
+	}
 }
 
 function sanitizeSurrogates(text: string): string {
@@ -846,6 +880,7 @@ export function streamVertexClaude(
 			const settingsEnv = resolveSettingsEnv();
 			const projectInfo = resolveProjectId(settingsEnv);
 			const region = resolveRegion(settingsEnv);
+			const baseURL = buildVertexBaseUrl(region);
 
 			if (!projectInfo) {
 				throw new Error(
@@ -867,10 +902,13 @@ export function streamVertexClaude(
 			// against an empty join, which Anthropic rejects with a 400.
 			const betaFeatures = ["interleaved-thinking-2025-05-14"];
 
-			// Create AnthropicVertex client - uses Google ADC automatically
+			// Create AnthropicVertex client - uses Google ADC automatically.
+			// Pass an explicit validated baseURL so ANTHROPIC_VERTEX_BASE_URL
+			// cannot redirect traffic to a non-Google endpoint.
 			const client = new AnthropicVertex({
 				projectId: projectInfo.id,
 				region: region,
+				baseURL,
 				defaultHeaders: betaFeatures.length > 0 ? { "anthropic-beta": betaFeatures.join(",") } : {},
 			});
 
@@ -1067,9 +1105,10 @@ export default function (pi: ExtensionAPI) {
 	}
 
 	const region = resolveRegion(settingsEnv);
+	const baseURL = buildVertexBaseUrl(region);
 
 	pi.registerProvider("google-vertex-claude", {
-		baseUrl: `https://${region}-aiplatform.googleapis.com`, // Display URL, SDK handles actual endpoint
+		baseUrl: baseURL, // Display URL; streamVertexClaude passes the same validated endpoint to the SDK
 		apiKey: projectInfo.envVar, // Env var for detection
 		api: "vertex-claude-api", // Custom API identifier
 

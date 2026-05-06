@@ -1,7 +1,7 @@
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock(
 	"@mariozechner/pi-ai",
@@ -33,6 +33,9 @@ let mapReasoningToEffort: typeof import("../index.js").mapReasoningToEffort;
 let hasOpus47ApiRestrictions: typeof import("../index.js").hasOpus47ApiRestrictions;
 let readSettingsEnv: typeof import("../index.js").readSettingsEnv;
 let resolveSettingsEnv: typeof import("../index.js").resolveSettingsEnv;
+let validateVertexRegion: typeof import("../index.js").validateVertexRegion;
+let resolveRegion: typeof import("../index.js").resolveRegion;
+let buildVertexBaseUrl: typeof import("../index.js").buildVertexBaseUrl;
 
 beforeAll(async () => {
 	const helpers = await import("../index.js");
@@ -51,6 +54,9 @@ beforeAll(async () => {
 	hasOpus47ApiRestrictions = helpers.hasOpus47ApiRestrictions;
 	readSettingsEnv = helpers.readSettingsEnv;
 	resolveSettingsEnv = helpers.resolveSettingsEnv;
+	validateVertexRegion = helpers.validateVertexRegion;
+	resolveRegion = helpers.resolveRegion;
+	buildVertexBaseUrl = helpers.buildVertexBaseUrl;
 });
 
 describe("vertex-claude helpers", () => {
@@ -743,6 +749,62 @@ describe("iterateAnthropicEvents", () => {
 				// no-op
 			}
 		}).rejects.toThrow(/overloaded/);
+	});
+});
+
+describe("Vertex region validation", () => {
+	const REGION_ENV_KEYS = ["GOOGLE_CLOUD_LOCATION", "CLOUD_ML_REGION"] as const;
+	const savedEnv: Partial<Record<(typeof REGION_ENV_KEYS)[number], string>> = {};
+
+	beforeEach(() => {
+		for (const key of REGION_ENV_KEYS) {
+			savedEnv[key] = process.env[key];
+			delete process.env[key];
+		}
+	});
+
+	afterEach(() => {
+		for (const key of REGION_ENV_KEYS) {
+			if (savedEnv[key] === undefined) {
+				delete process.env[key];
+			} else {
+				process.env[key] = savedEnv[key];
+			}
+		}
+	});
+
+	it("accepts Google Vertex regions and multi-region endpoint names", () => {
+		expect(validateVertexRegion("us-east5")).toBe("us-east5");
+		expect(validateVertexRegion("europe-west4")).toBe("europe-west4");
+		expect(validateVertexRegion("global")).toBe("global");
+		expect(validateVertexRegion("us")).toBe("us");
+		expect(validateVertexRegion("eu")).toBe("eu");
+	});
+
+	it("builds only Google Vertex base URLs", () => {
+		expect(buildVertexBaseUrl("us-east5")).toBe("https://us-east5-aiplatform.googleapis.com/v1");
+		expect(buildVertexBaseUrl("global")).toBe("https://aiplatform.googleapis.com/v1");
+		expect(buildVertexBaseUrl("us")).toBe("https://aiplatform.us.rep.googleapis.com/v1");
+		expect(buildVertexBaseUrl("eu")).toBe("https://aiplatform.eu.rep.googleapis.com/v1");
+	});
+
+	it("rejects URL injection characters in region config", () => {
+		for (const region of [
+			"attacker.example/x",
+			"us-east5.googleapis.com",
+			"../us-east5",
+			"us-east5:443",
+			"us_east5",
+			"-us-east5",
+			"us-east5-",
+		]) {
+			expect(() => validateVertexRegion(region)).toThrow(/Invalid Vertex AI region/);
+		}
+	});
+
+	it("validates region values resolved from Claude settings", () => {
+		expect(resolveRegion({ CLOUD_ML_REGION: "us-east5" })).toBe("us-east5");
+		expect(() => resolveRegion({ CLOUD_ML_REGION: "attacker.example/x" })).toThrow(/Invalid Vertex AI region/);
 	});
 });
 

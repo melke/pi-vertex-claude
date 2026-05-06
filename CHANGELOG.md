@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Validate Vertex AI region values and pass an explicit Google Vertex base URL to prevent malicious env/settings values from redirecting requests off `googleapis.com`.
+
 ### Changed
 - Mark this extension fork as GitHub-only/private; it does not exist as an npm package, so Pi installation is documented via the GitHub repository URL.
 - Bump `@anthropic-ai/sdk` to `^0.94.0` to avoid the vulnerable `0.90.0` resolution reported by `npm audit`.
