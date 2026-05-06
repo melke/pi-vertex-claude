@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - Mark this extension fork as GitHub-only/private; it does not exist as an npm package, so Pi installation is documented via the GitHub repository URL.
+- Bump `@anthropic-ai/sdk` to `^0.94.0` to avoid the vulnerable `0.90.0` resolution reported by `npm audit`.
 
 ## [0.1.7] - 2026-04-30
 
