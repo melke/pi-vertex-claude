@@ -1,7 +1,8 @@
 {
-  "name": "@carze/pi-vertex-claude",
+  "name": "@melke/pi-vertex-claude",
   "version": "0.1.7",
-  "description": "Google Vertex AI Claude provider for Pi coding agent",
+  "private": true,
+  "description": "GitHub-only fork of the Google Vertex AI Claude provider for Pi coding agent",
   "keywords": [
     "pi-package",
     "vertex-ai",
@@ -13,11 +14,11 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/carze/pi-vertex-claude.git"
+    "url": "git+https://github.com/melke/pi-vertex-claude.git"
   },
-  "homepage": "https://github.com/carze/pi-vertex-claude#readme",
+  "homepage": "https://github.com/melke/pi-vertex-claude#readme",
   "bugs": {
-    "url": "https://github.com/carze/pi-vertex-claude/issues"
+    "url": "https://github.com/melke/pi-vertex-claude/issues"
   },
   "author": "Isaac Raja",
   "license": "MIT",

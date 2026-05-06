@@ -2,10 +2,32 @@
 
 Access Claude models via Google Vertex AI.
 
+> This repository is a GitHub-only fork of `@carze/pi-vertex-claude`, which was forked from `@isaacraja/pi-vertex-claude`. It is not published as an npm package. Install this fork in Pi from the GitHub repository URL below.
+
 ## Installation
 
+Install this fork with Pi using its GitHub URL:
+
 ```bash
-pi install npm:@isaacraja/pi-vertex-claude
+pi install https://github.com/melke/pi-vertex-claude
+```
+
+If you prefer SSH:
+
+```bash
+pi install git:git@github.com:melke/pi-vertex-claude
+```
+
+To pin a specific branch, tag, or commit, append `@ref`:
+
+```bash
+pi install https://github.com/melke/pi-vertex-claude@main
+```
+
+Use `-l` if you want to add it to project-local Pi settings instead of your global Pi settings:
+
+```bash
+pi install -l https://github.com/melke/pi-vertex-claude
 ```
 
 ## Setup
