@@ -281,6 +281,26 @@ function sanitizeSurrogates(text: string): string {
 	return text.replace(/[\uD800-\uDFFF]/g, "\uFFFD");
 }
 
+// `context.systemPrompt` is `string` in older pi-ai versions but may be
+// `string[]` in newer/forked runtimes. Accept either shape and emit Anthropic
+// system blocks. cache_control sits on the LAST block only — Anthropic
+// breakpoints are cumulative prefix cuts, so one trailing breakpoint covers all
+// preceding blocks without burning slots against the 4-breakpoint cap.
+export function buildSystemBlocks(
+	systemPrompt: unknown,
+): Array<{ type: "text"; text: string; cache_control?: { type: "ephemeral" } }> | undefined {
+	if (systemPrompt === undefined || systemPrompt === null) return undefined;
+	const candidates: unknown[] = Array.isArray(systemPrompt) ? systemPrompt : [systemPrompt];
+	const blocks = candidates
+		.filter((prompt): prompt is string => typeof prompt === "string")
+		.map((prompt) => sanitizeSurrogates(prompt))
+		.filter((prompt) => prompt.length > 0)
+		.map((text) => ({ type: "text" as const, text }));
+	if (blocks.length === 0) return undefined;
+	(blocks[blocks.length - 1] as { cache_control?: { type: "ephemeral" } }).cache_control = { type: "ephemeral" };
+	return blocks;
+}
+
 // Anthropic rejects tool_use / tool_use_id that doesn't match ^[a-zA-Z0-9_-]+
 // and caps the id at 64 chars. Upstream layers (pi-coding-agent, tool runners)
 // can hand us ids with colons or dots, so normalize before sending.
@@ -919,15 +939,11 @@ export function streamVertexClaude(
 				stream: true,
 			};
 
-			// Add system prompt with cache control
-			if (context.systemPrompt) {
-				params.system = [
-					{
-						type: "text",
-						text: sanitizeSurrogates(context.systemPrompt),
-						cache_control: { type: "ephemeral" },
-					},
-				];
+			// Add system prompt with cache control. Handles both legacy `string`
+			// and newer/forked `string[]` shapes for context.systemPrompt.
+			const systemBlocks = buildSystemBlocks(context.systemPrompt);
+			if (systemBlocks) {
+				params.system = systemBlocks;
 			}
 
 			// Add temperature if specified

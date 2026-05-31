@@ -36,6 +36,7 @@ let resolveSettingsEnv: typeof import("../index.js").resolveSettingsEnv;
 let validateVertexRegion: typeof import("../index.js").validateVertexRegion;
 let resolveRegion: typeof import("../index.js").resolveRegion;
 let buildVertexBaseUrl: typeof import("../index.js").buildVertexBaseUrl;
+let buildSystemBlocks: typeof import("../index.js").buildSystemBlocks;
 
 beforeAll(async () => {
 	const helpers = await import("../index.js");
@@ -57,6 +58,7 @@ beforeAll(async () => {
 	validateVertexRegion = helpers.validateVertexRegion;
 	resolveRegion = helpers.resolveRegion;
 	buildVertexBaseUrl = helpers.buildVertexBaseUrl;
+	buildSystemBlocks = helpers.buildSystemBlocks;
 });
 
 describe("vertex-claude helpers", () => {
@@ -579,6 +581,54 @@ describe("convertMessages thinking block conversion", () => {
 		expect(assistant.content[0].text).toContain("<external-reasoning>");
 		expect(assistant.content[0].text).toContain("orphan");
 		expect(JSON.stringify(assistant.content)).not.toContain("stale-sig");
+	});
+});
+
+describe("buildSystemBlocks", () => {
+	it("accepts a string array and emits one block per prompt", () => {
+		const blocks = buildSystemBlocks(["first prompt", "second prompt"]);
+		expect(blocks).toEqual([
+			{ type: "text", text: "first prompt" },
+			{ type: "text", text: "second prompt", cache_control: { type: "ephemeral" } },
+		]);
+	});
+
+	it("attaches cache_control to the last block only", () => {
+		const blocks = buildSystemBlocks(["a", "b", "c"]);
+		expect(blocks).toBeDefined();
+		expect((blocks as any[])[0].cache_control).toBeUndefined();
+		expect((blocks as any[])[1].cache_control).toBeUndefined();
+		expect((blocks as any[])[2].cache_control).toEqual({ type: "ephemeral" });
+	});
+
+	it("accepts a single string for backward compatibility", () => {
+		const blocks = buildSystemBlocks("legacy single prompt");
+		expect(blocks).toEqual([
+			{ type: "text", text: "legacy single prompt", cache_control: { type: "ephemeral" } },
+		]);
+	});
+
+	it("returns undefined for missing, empty, or non-string prompts", () => {
+		expect(buildSystemBlocks(undefined)).toBeUndefined();
+		expect(buildSystemBlocks(null)).toBeUndefined();
+		expect(buildSystemBlocks([])).toBeUndefined();
+		expect(buildSystemBlocks([""])).toBeUndefined();
+		expect(buildSystemBlocks([42 as any, null as any])).toBeUndefined();
+	});
+
+	it("sanitizes lone surrogates in each prompt", () => {
+		const lone = "\uD83D";
+		const blocks = buildSystemBlocks([`hello${lone}world`]);
+		expect(blocks).toBeDefined();
+		expect((blocks as any[])[0].text).toBe("hello�world");
+	});
+
+	it("filters out non-string entries defensively", () => {
+		const blocks = buildSystemBlocks(["valid", 42 as any, null as any, "also valid"]);
+		expect(blocks).toEqual([
+			{ type: "text", text: "valid" },
+			{ type: "text", text: "also valid", cache_control: { type: "ephemeral" } },
+		]);
 	});
 });
 
