@@ -1109,7 +1109,7 @@ export default function (pi: ExtensionAPI) {
 
 	pi.registerProvider("google-vertex-claude", {
 		baseUrl: baseURL, // Display URL; streamVertexClaude passes the same validated endpoint to the SDK
-		apiKey: projectInfo.envVar, // Env var for detection
+		apiKey: `$${projectInfo.envVar}`, // Env var for detection
 		api: "vertex-claude-api", // Custom API identifier
 
 		models: VERTEX_CLAUDE_MODELS,
