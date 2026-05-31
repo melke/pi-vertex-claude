@@ -108,38 +108,51 @@ describe("vertex-claude helpers", () => {
 		expect(lastBlock.cache_control).toEqual({ type: "ephemeral" });
 	});
 
-	it("returns adaptive thinking with display=summarized and effort for Opus 4.7", () => {
+	it("returns adaptive thinking with display=summarized and shifted effort for Opus 4.7", () => {
 		const result = buildThinkingConfig("claude-opus-4-7", "high", 16000);
 		expect(result.thinking).toEqual({ type: "adaptive", display: "summarized" });
-		expect(result.effort).toBe("high");
+		expect(result.effort).toBe("xhigh");
 		expect(result.maxTokens).toBe(16000);
 	});
 
-	it("maps xhigh reasoning to effort=xhigh on Opus 4.7", () => {
+	it("maps top pi-ai level xhigh to wire effort=max on Opus 4.7", () => {
 		const result = buildThinkingConfig("claude-opus-4-7", "xhigh", 16000);
 		expect(result.thinking).toEqual({ type: "adaptive", display: "summarized" });
-		expect(result.effort).toBe("xhigh");
+		expect(result.effort).toBe("max");
 	});
 
-	it("maps xhigh reasoning to effort=high on non-4.7 models (defensive)", () => {
-		// Not currently reachable through this code path (only Opus 4.7 goes
-		// adaptive here) but guards mapReasoningToEffort contract.
+	it("returns adaptive thinking with display=summarized and shifted effort for Opus 4.8", () => {
+		const result = buildThinkingConfig("claude-opus-4-8", "high", 16000);
+		expect(result.thinking).toEqual({ type: "adaptive", display: "summarized" });
+		expect(result.effort).toBe("xhigh");
+		expect(result.maxTokens).toBe(16000);
+	});
+
+	it("maps top pi-ai level xhigh to wire effort=max on Opus 4.8", () => {
+		expect(mapReasoningToEffort("xhigh", "claude-opus-4-8")).toBe("max");
+	});
+
+	it("maps xhigh reasoning to effort=high on non-4.7+ models", () => {
+		// Opus/Sonnet 4.6 use adaptive thinking in this fork, but keep the
+		// existing capped effort mapping rather than the Opus 4.7+ shifted scale.
 		expect(mapReasoningToEffort("xhigh", "claude-opus-4-6")).toBe("high");
 		expect(mapReasoningToEffort("xhigh", "claude-sonnet-4-6")).toBe("high");
 	});
 
-	it("maps reasoning levels to their expected effort values", () => {
+	it("shifts each pi-ai reasoning level up one tier on Opus 4.7+", () => {
 		expect(mapReasoningToEffort("minimal", "claude-opus-4-7")).toBe("low");
-		expect(mapReasoningToEffort("low", "claude-opus-4-7")).toBe("low");
-		expect(mapReasoningToEffort("medium", "claude-opus-4-7")).toBe("medium");
-		expect(mapReasoningToEffort("high", "claude-opus-4-7")).toBe("high");
-		expect(mapReasoningToEffort("xhigh", "claude-opus-4-7")).toBe("xhigh");
-		expect(mapReasoningToEffort("bogus", "claude-opus-4-7")).toBe("high");
+		expect(mapReasoningToEffort("low", "claude-opus-4-7")).toBe("medium");
+		expect(mapReasoningToEffort("medium", "claude-opus-4-7")).toBe("high");
+		expect(mapReasoningToEffort("high", "claude-opus-4-7")).toBe("xhigh");
+		expect(mapReasoningToEffort("xhigh", "claude-opus-4-7")).toBe("max");
+		expect(mapReasoningToEffort("bogus", "claude-opus-4-7")).toBe("xhigh");
 	});
 
-	it("flags Opus 4.7 (and variants) as having sampling-param restrictions", () => {
+	it("flags Opus 4.7+ (and variants) as having sampling-param restrictions", () => {
 		expect(hasOpus47ApiRestrictions("claude-opus-4-7")).toBe(true);
 		expect(hasOpus47ApiRestrictions("claude-opus-4-7@20260115")).toBe(true);
+		expect(hasOpus47ApiRestrictions("claude-opus-4-8")).toBe(true);
+		expect(hasOpus47ApiRestrictions("claude-opus-4-8@20260528")).toBe(true);
 	});
 
 	it("does not flag Opus 4.6 / Sonnet 4.6 / older models as restricted", () => {

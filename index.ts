@@ -64,6 +64,18 @@ import { parse as partialParse } from "partial-json";
 
 const VERTEX_CLAUDE_MODELS = [
 	{
+		id: "claude-opus-4-8",
+		name: "Claude Opus 4.8 (Vertex)",
+		reasoning: true,
+		input: ["text", "image"] as ("text" | "image")[],
+		cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+		contextWindow: 1000000,
+		maxTokens: 128000,
+		// Declare the effort range explicitly so pi/omp pickers expose the full
+		// minimal..xhigh set for our custom vertex-claude-api provider.
+		thinking: { minLevel: "minimal", maxLevel: "xhigh" },
+	},
+	{
 		id: "claude-opus-4-7",
 		name: "Claude Opus 4.7 (Vertex)",
 		reasoning: true,
@@ -71,6 +83,7 @@ const VERTEX_CLAUDE_MODELS = [
 		cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
 		contextWindow: 1000000,
 		maxTokens: 128000,
+		thinking: { minLevel: "minimal", maxLevel: "xhigh" },
 	},
 	{
 		id: "claude-opus-4-6",
@@ -796,19 +809,50 @@ export type ThinkingConfig =
 	| { type: "adaptive"; display: ThinkingDisplay }
 	| { type: "enabled"; budget_tokens: number; display: ThinkingDisplay };
 
-export type ThinkingEffort = "low" | "medium" | "high" | "xhigh";
+export type ThinkingEffort = "low" | "medium" | "high" | "xhigh" | "max";
+
+// Opus 4.7 introduced behaviors that every later Opus minor inherits: adaptive
+// thinking, "xhigh"/"max" reasoning effort, and rejection of non-default
+// sampling parameters. Centralize the version check so the call sites stay in sync.
+function isOpus47Plus(modelId: string): boolean {
+	return modelId.startsWith("claude-opus-4-7") || modelId.startsWith("claude-opus-4-8");
+}
+
+function isAdaptiveThinkingModel(modelId: string): boolean {
+	return isOpus47Plus(modelId) || modelId.includes("opus-4-6") || modelId.includes("sonnet-4-6");
+}
 
 // Opus 4.7+ rejects non-default sampling parameters (temperature/top_p/top_k)
 // with a 400 error. Matches oh-my-pi PR #728 hasOpus47ApiRestrictions and
 // needs to be stripped before the request is sent.
 export function hasOpus47ApiRestrictions(modelId: string): boolean {
-	return modelId.startsWith("claude-opus-4-7");
+	return isOpus47Plus(modelId);
 }
 
-// Map pi-ai reasoning level to the Anthropic adaptive-thinking `effort` value.
-// Only Opus 4.7 supports "xhigh" on `output_config`; everything else caps at
-// "high".
+// Map a pi-ai reasoning level to the Anthropic adaptive-thinking `effort` value.
+//
+// SHORTCUT for Opus 4.7+: pi-ai exposes minimal/low/medium/high/xhigh, but
+// Anthropic's adaptive scale is low/medium/high/xhigh/max (no "minimal"). Shift
+// every pi-ai level up one tier so the picker's top slot reaches "max".
+// Opus/Sonnet 4.6 keep this fork's existing unshifted/capped mapping.
 export function mapReasoningToEffort(reasoning: string, modelId: string): ThinkingEffort {
+	if (isOpus47Plus(modelId)) {
+		switch (reasoning) {
+			case "minimal":
+				return "low";
+			case "low":
+				return "medium";
+			case "medium":
+				return "high";
+			case "high":
+				return "xhigh";
+			case "xhigh":
+				return "max";
+			default:
+				return "xhigh";
+		}
+	}
+
 	switch (reasoning) {
 		case "minimal":
 		case "low":
@@ -818,7 +862,7 @@ export function mapReasoningToEffort(reasoning: string, modelId: string): Thinki
 		case "high":
 			return "high";
 		case "xhigh":
-			return modelId.includes("opus-4-7") ? "xhigh" : "high";
+			return "high";
 		default:
 			return "high";
 	}
@@ -834,7 +878,7 @@ export function buildThinkingConfig(
 	// the default `display` to "omitted", which strips thinking text from the
 	// stream and corrupts tool_use partial_json delivery (TodoWrite "JSON parse
 	// error"). Pin display to "summarized" per pi-mono acbf8eca.
-	if (modelId.includes("opus-4-7") || modelId.includes("opus-4-6") || modelId.includes("sonnet-4-6")) {
+	if (isAdaptiveThinkingModel(modelId)) {
 		return {
 			thinking: { type: "adaptive", display: "summarized" },
 			maxTokens,

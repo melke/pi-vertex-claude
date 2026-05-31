@@ -7,7 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Claude Opus 4.8 (`claude-opus-4-8`) with the same 1M context / 128K output profile and Opus 4.7+ request handling.
+- Explicit Opus 4.7/4.8 thinking metadata and shifted adaptive effort mapping so the top UI effort reaches Anthropic's `max` effort.
+
 ### Fixed
+- Use the explicit `$ENV_VAR` provider `apiKey` syntax required by newer Pi versions.
+- Instantiate `AssistantMessageEventStream` directly and accept both string and string-array system prompts for newer/forked Pi runtimes.
 - Validate Vertex AI region values and pass an explicit Google Vertex base URL to prevent malicious env/settings values from redirecting requests off `googleapis.com`.
 
 ### Changed
