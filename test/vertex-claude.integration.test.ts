@@ -19,7 +19,7 @@ const shouldRun = !!project && !!location && hasAdcCredentials();
 describe.skipIf(!shouldRun)("Vertex Claude integration (ADC)", () => {
 	beforeAll(async () => {
 		vi.resetModules();
-		vi.doUnmock("@mariozechner/pi-ai");
+		vi.doUnmock("@earendil-works/pi-ai");
 		const module = await import("../index.js");
 		streamVertexClaude = module.streamVertexClaude;
 	});

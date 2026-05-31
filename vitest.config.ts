@@ -3,7 +3,7 @@ import { defineConfig } from "vitest/config";
 
 const piMonoRoot = process.env.PI_MONO_ROOT;
 const alias = piMonoRoot
-	? { "@mariozechner/pi-ai": resolve(piMonoRoot, "packages/ai/src/index.ts") }
+	? { "@earendil-works/pi-ai": resolve(piMonoRoot, "packages/ai/src/index.ts") }
 	: {};
 
 export default defineConfig({

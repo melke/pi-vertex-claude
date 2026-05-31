@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock(
-	"@mariozechner/pi-ai",
+	"@earendil-works/pi-ai",
 	() => ({
 		calculateCost: () => undefined,
 		AssistantMessageEventStream: class {
