@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - Use the explicit `$ENV_VAR` provider `apiKey` syntax required by newer Pi versions.
 - Instantiate `AssistantMessageEventStream` directly and accept both string and string-array system prompts for newer/forked Pi runtimes.
+- Remove deprecated Anthropic beta headers; fine-grained tool streaming is configured per tool and interleaved thinking is GA for adaptive-thinking models.
 - Validate Vertex AI region values and pass an explicit Google Vertex base URL to prevent malicious env/settings values from redirecting requests off `googleapis.com`.
 
 ### Changed

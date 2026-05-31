@@ -960,10 +960,9 @@ export function streamVertexClaude(
 				);
 			}
 
-			// fine-grained-tool-streaming-2025-05-14 was deprecated; replaced by
-			// per-tool eager_input_streaming in convertTools. Guard the header
-			// against an empty join, which Anthropic rejects with a 400.
-			const betaFeatures = ["interleaved-thinking-2025-05-14"];
+			// fine-grained-tool-streaming-2025-05-14 is replaced by per-tool
+			// eager_input_streaming in convertTools, and interleaved thinking is GA
+			// for the newer adaptive-thinking models. Do not send deprecated beta headers.
 
 			// Create AnthropicVertex client - uses Google ADC automatically.
 			// Pass an explicit validated baseURL so ANTHROPIC_VERTEX_BASE_URL
@@ -972,7 +971,6 @@ export function streamVertexClaude(
 				projectId: projectInfo.id,
 				region: region,
 				baseURL,
-				defaultHeaders: betaFeatures.length > 0 ? { "anthropic-beta": betaFeatures.join(",") } : {},
 			});
 
 			// Build request params
