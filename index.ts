@@ -64,6 +64,26 @@ import { parse as partialParse } from "partial-json";
 
 const VERTEX_CLAUDE_MODELS = [
 	{
+		id: "claude-opus-5",
+		name: "Claude Opus 5 (Vertex)",
+		reasoning: true,
+		input: ["text", "image"] as ("text" | "image")[],
+		cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+		contextWindow: 1000000,
+		maxTokens: 128000,
+		thinking: { minLevel: "minimal", maxLevel: "xhigh" },
+	},
+	{
+		id: "claude-sonnet-5",
+		name: "Claude Sonnet 5 (Vertex)",
+		reasoning: true,
+		input: ["text", "image"] as ("text" | "image")[],
+		cost: { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
+		contextWindow: 1000000,
+		maxTokens: 128000,
+		thinking: { minLevel: "minimal", maxLevel: "xhigh" },
+	},
+	{
 		id: "claude-opus-4-8",
 		name: "Claude Opus 4.8 (Vertex)",
 		reasoning: true,
@@ -112,24 +132,7 @@ const VERTEX_CLAUDE_MODELS = [
 		contextWindow: 200000,
 		maxTokens: 32000,
 	},
-	{
-		id: "claude-opus-4-1@20250805",
-		name: "Claude Opus 4.1 (Vertex)",
-		reasoning: true,
-		input: ["text", "image"] as ("text" | "image")[],
-		cost: { input: 15, output: 75, cacheRead: 1.5, cacheWrite: 18.75 },
-		contextWindow: 200000,
-		maxTokens: 32000,
-	},
-	{
-		id: "claude-opus-4@20250514",
-		name: "Claude Opus 4 (Vertex)",
-		reasoning: true,
-		input: ["text", "image"] as ("text" | "image")[],
-		cost: { input: 15, output: 75, cacheRead: 1.5, cacheWrite: 18.75 },
-		contextWindow: 200000,
-		maxTokens: 32000,
-	},
+
 	{
 		id: "claude-sonnet-4-5@20250929",
 		name: "Claude Sonnet 4.5 (Vertex)",
@@ -139,24 +142,7 @@ const VERTEX_CLAUDE_MODELS = [
 		contextWindow: 200000,
 		maxTokens: 64000,
 	},
-	{
-		id: "claude-sonnet-4@20250514",
-		name: "Claude Sonnet 4 (Vertex)",
-		reasoning: true,
-		input: ["text", "image"] as ("text" | "image")[],
-		cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
-		contextWindow: 200000,
-		maxTokens: 64000,
-	},
-	{
-		id: "claude-3-7-sonnet@20250219",
-		name: "Claude 3.7 Sonnet (Vertex)",
-		reasoning: true,
-		input: ["text", "image"] as ("text" | "image")[],
-		cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
-		contextWindow: 200000,
-		maxTokens: 64000,
-	},
+
 	{
 		id: "claude-haiku-4-5@20251001",
 		name: "Claude Haiku 4.5 (Vertex)",
@@ -166,24 +152,7 @@ const VERTEX_CLAUDE_MODELS = [
 		contextWindow: 200000,
 		maxTokens: 64000,
 	},
-	{
-		id: "claude-3-5-sonnet-v2@20241022",
-		name: "Claude 3.5 Sonnet v2 (Vertex)",
-		reasoning: false,
-		input: ["text", "image"] as ("text" | "image")[],
-		cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
-		contextWindow: 200000,
-		maxTokens: 8192,
-	},
-	{
-		id: "claude-3-5-haiku@20241022",
-		name: "Claude 3.5 Haiku (Vertex)",
-		reasoning: false,
-		input: ["text", "image"] as ("text" | "image")[],
-		cost: { input: 0.8, output: 4, cacheRead: 0.08, cacheWrite: 1 },
-		contextWindow: 200000,
-		maxTokens: 8192,
-	},
+
 ];
 
 // =============================================================================
@@ -815,11 +784,11 @@ export type ThinkingEffort = "low" | "medium" | "high" | "xhigh" | "max";
 // thinking, "xhigh"/"max" reasoning effort, and rejection of non-default
 // sampling parameters. Centralize the version check so the call sites stay in sync.
 function isOpus47Plus(modelId: string): boolean {
-	return modelId.startsWith("claude-opus-4-7") || modelId.startsWith("claude-opus-4-8");
+	return modelId.startsWith("claude-opus-4-7") || modelId.startsWith("claude-opus-4-8") || modelId.startsWith("claude-opus-5") || modelId.startsWith("claude-sonnet-5");
 }
 
 function isAdaptiveThinkingModel(modelId: string): boolean {
-	return isOpus47Plus(modelId) || modelId.includes("opus-4-6") || modelId.includes("sonnet-4-6");
+	return isOpus47Plus(modelId) || modelId.includes("opus-4-6") || modelId.includes("sonnet-4-6") || modelId.includes("sonnet-5");
 }
 
 // Opus 4.7+ rejects non-default sampling parameters (temperature/top_p/top_k)
