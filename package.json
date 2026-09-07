@@ -49,5 +49,12 @@
   },
   "devDependencies": {
     "vitest": "^3.2.7"
+  },
+  "allowScripts": {
+    "@google/genai": false,
+    "esbuild@0.28.1": true,
+    "esbuild@0.28.2": true,
+    "fsevents": false,
+    "protobufjs": false
   }
 }
