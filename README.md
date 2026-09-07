@@ -38,16 +38,19 @@ Authenticate with Google Cloud:
 gcloud auth application-default login
 ```
 
-Set your project:
+Set your project. The provider defaults to the EU multi-region endpoint; setting the location explicitly is optional but shown here for clarity.
 
 ```bash
 export GOOGLE_CLOUD_PROJECT=your-project-id
+export GOOGLE_CLOUD_LOCATION=eu
 ```
+
+Claude Fable 5.1 is available on the `eu`, `us`, and `global` endpoints.
 
 Use the provider:
 
 ```bash
-pi --provider google-vertex-claude --model claude-sonnet-5
+pi --provider google-vertex-claude --model claude-fable-5-1
 ```
 
 ## Shell Helper
@@ -57,7 +60,8 @@ Add to `~/.bashrc` or `~/.zshrc`:
 ```bash
 piv() {
   GOOGLE_CLOUD_PROJECT=your-project-id \
-  pi --provider google-vertex-claude --model claude-sonnet-5 "$@"
+  GOOGLE_CLOUD_LOCATION=eu \
+  pi --provider google-vertex-claude --model claude-fable-5-1 "$@"
 }
 ```
 
@@ -65,6 +69,7 @@ piv() {
 
 | Model | Context | Output |
 |-------|---------|--------|
+| `claude-fable-5-1` | 1M | 128K |
 | `claude-opus-5` | 1M | 128K |
 | `claude-sonnet-5` | 1M | 128K |
 | `claude-opus-4-8` | 1M | 128K |
@@ -74,6 +79,14 @@ piv() {
 | `claude-opus-4-5@20251101` | 200K | 32K |
 | `claude-sonnet-4-5@20250929` | 200K | 64K |
 | `claude-haiku-4-5@20251001` | 200K | 64K |
+
+## Claude Fable 5.1 compatibility
+
+Claude Fable 5.1 uses always-on adaptive thinking. Pi's five reasoning levels map to Anthropic's `low`, `medium`, `high`, `xhigh`, and `max` effort levels.
+
+The provider uses automatic tool selection. Fable 5.1 rejects forced `tool_choice` values (`any` or a named tool); use `auto` or `none` in custom request paths.
+
+Keep Fable 5.1 conversations append-only. Editing the system prompt, tools, or earlier messages can invalidate signed thinking blocks. Fable 5.1 can read thinking from earlier Claude models, but earlier models cannot read Fable 5.1 thinking; this provider omits those incompatible blocks when switching back.
 
 ## Prerequisites
 

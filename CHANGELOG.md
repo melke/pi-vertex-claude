@@ -8,19 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Claude Fable 5.1 (`claude-fable-5-1`) with a 1M context window, 128K output, adaptive thinking, and Vertex global pricing ($10 input / $50 output / $0.25 cache read / $12.50 5-minute cache write per MTok).
 - Claude Opus 4.8 (`claude-opus-4-8`) with the same 1M context / 128K output profile and Opus 4.7+ request handling.
 - Explicit Opus 4.7/4.8 thinking metadata and shifted adaptive effort mapping so the top UI effort reaches Anthropic's `max` effort.
 
 ### Fixed
+- Apply Fable 5.1 request restrictions: strip unsupported sampling parameters, reject forced tool choices, and omit its one-way thinking blocks when switching back to an earlier Claude model.
 - Use the explicit `$ENV_VAR` provider `apiKey` syntax required by newer Pi versions.
-- Instantiate `AssistantMessageEventStream` directly and accept both string and string-array system prompts for newer/forked Pi runtimes.
+- Create assistant streams through Pi's extension-safe `createAssistantMessageEventStream` factory and accept both string and string-array system prompts for newer/forked Pi runtimes.
 - Remove deprecated Anthropic beta headers; fine-grained tool streaming is configured per tool and interleaved thinking is GA for adaptive-thinking models.
 - Validate Vertex AI region values and pass an explicit Google Vertex base URL to prevent malicious env/settings values from redirecting requests off `googleapis.com`.
 
 ### Changed
+- Default Vertex requests to the EU multi-region endpoint (`eu`) when no location is configured, and apply Google's regional 10% premium to displayed model costs outside the global endpoint.
 - Switch Pi peer dependencies/imports from deprecated `@mariozechner/*` packages to `@earendil-works/*`.
 - Mark this extension fork as GitHub-only/private; it does not exist as an npm package, so Pi installation is documented via the GitHub repository URL.
-- Bump `@anthropic-ai/sdk` to `^0.94.0` to avoid the vulnerable `0.90.0` resolution reported by `npm audit`.
+- Upgrade `@anthropic-ai/sdk` to `^0.124.0`, `@anthropic-ai/vertex-sdk` to `^0.19.7`, and Vitest to `^3.2.7` for the current Claude and Pi runtime ecosystem.
 
 ## [0.1.7] - 2026-04-30
 

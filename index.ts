@@ -10,7 +10,7 @@
  *   3. Provide project ID and (optionally) region via any of:
  *      a. Shell env vars (highest priority):
  *         - GOOGLE_CLOUD_PROJECT or GCLOUD_PROJECT or ANTHROPIC_VERTEX_PROJECT_ID
- *         - GOOGLE_CLOUD_LOCATION or CLOUD_ML_REGION (defaults to us-east5)
+ *         - GOOGLE_CLOUD_LOCATION or CLOUD_ML_REGION (defaults to eu)
  *      b. Working dir: <cwd>/.claude/settings.local.json under `env`
  *      c. Global: ~/.claude/settings.json under `env`
  *
@@ -18,13 +18,13 @@
  *      so that template can drive this plugin without exporting env vars.
  *
  * Usage:
- *   pi --provider google-vertex-claude --model claude-sonnet-4@20250514
+ *   pi --provider google-vertex-claude --model claude-fable-5-1
  *
  * Or add to your shell config:
  *   function piv
  *     set -x GOOGLE_CLOUD_PROJECT your-project-id
- *     set -x GOOGLE_CLOUD_LOCATION us-east5
- *     pi --provider google-vertex-claude --model claude-opus-4-5@20251101 $argv
+ *     set -x GOOGLE_CLOUD_LOCATION eu
+ *     pi --provider google-vertex-claude --model claude-fable-5-1 $argv
  *   end
  */
 
@@ -37,8 +37,9 @@ import type {
 import {
 	type Api,
 	type AssistantMessage,
-	AssistantMessageEventStream,
+	type AssistantMessageEventStream,
 	calculateCost,
+	createAssistantMessageEventStream,
 	type Context,
 	type ImageContent,
 	type Message,
@@ -46,6 +47,7 @@ import {
 	type SimpleStreamOptions,
 	type StopReason,
 	type TextContent,
+	type ThinkingBudgets,
 	type ThinkingContent,
 	type Tool,
 	type ToolCall,
@@ -62,7 +64,19 @@ import { parse as partialParse } from "partial-json";
 // Pricing from: https://cloud.google.com/vertex-ai/generative-ai/pricing#partner-models
 // =============================================================================
 
-const VERTEX_CLAUDE_MODELS = [
+// Base prices are for the global endpoint. buildVertexClaudeModels applies
+// Google's regional 10% premium when another endpoint is selected.
+export const VERTEX_CLAUDE_MODELS = [
+	{
+		id: "claude-fable-5-1",
+		name: "Claude Fable 5.1 (Vertex)",
+		reasoning: true,
+		input: ["text", "image"] as ("text" | "image")[],
+		cost: { input: 10, output: 50, cacheRead: 0.25, cacheWrite: 12.5 },
+		contextWindow: 1000000,
+		maxTokens: 128000,
+		thinking: { minLevel: "minimal", maxLevel: "xhigh" },
+	},
 	{
 		id: "claude-opus-5",
 		name: "Claude Opus 5 (Vertex)",
@@ -155,6 +169,22 @@ const VERTEX_CLAUDE_MODELS = [
 
 ];
 
+export function buildVertexClaudeModels(region: string): typeof VERTEX_CLAUDE_MODELS {
+	const safeRegion = validateVertexRegion(region);
+	if (safeRegion === "global") return VERTEX_CLAUDE_MODELS;
+
+	const regionalPrice = (price: number) => Math.round(price * 1.1 * 1_000_000) / 1_000_000;
+	return VERTEX_CLAUDE_MODELS.map((model) => ({
+		...model,
+		cost: {
+			input: regionalPrice(model.cost.input),
+			output: regionalPrice(model.cost.output),
+			cacheRead: regionalPrice(model.cost.cacheRead),
+			cacheWrite: regionalPrice(model.cost.cacheWrite),
+		},
+	}));
+}
+
 // =============================================================================
 // Helper Functions
 // =============================================================================
@@ -241,7 +271,7 @@ export function resolveRegion(settingsEnv?: SettingsEnv): string {
 		process.env.CLOUD_ML_REGION ||
 		settings.GOOGLE_CLOUD_LOCATION ||
 		settings.CLOUD_ML_REGION ||
-		"us-east5";
+		"eu";
 	return validateVertexRegion(region);
 }
 
@@ -391,7 +421,11 @@ export function convertMessages(messages: Message[], model: Model<Api>): any[] {
 						? { type: "text" as const, text: sanitizeSurrogates(item.text) }
 						: {
 								type: "image" as const,
-								source: { type: "base64" as const, media_type: item.mimeType, data: item.data },
+								source: {
+									type: "base64" as const,
+									media_type: item.mimeType as "image/jpeg" | "image/png" | "image/gif" | "image/webp",
+									data: item.data,
+								},
 							},
 				);
 				// Filter out images if model doesn't support them
@@ -413,13 +447,19 @@ export function convertMessages(messages: Message[], model: Model<Api>): any[] {
 			// a 400 "Invalid signature in thinking block". Gate signature passthrough
 			// on api+provider match; for foreign turns, drop the signature and wrap
 			// the thinking content so Claude reads it as external context rather
-			// than its own private reasoning.
+			// than its own private reasoning. Fable 5.1 thinking is also one-way:
+			// Fable can read earlier Claude thinking, but earlier models cannot read
+			// Fable 5.1 blocks, so omit those blocks when switching back.
 			const sameProvider = msg.api === model.api && msg.provider === model.provider;
+			const canReplayThinking =
+				typeof msg.model === "string" && canReplayThinkingBlock(msg.model, model.id);
 			const blocks: ContentBlockParam[] = [];
 			for (const block of msg.content) {
 				if (block.type === "text" && block.text.trim()) {
 					blocks.push({ type: "text", text: sanitizeSurrogates(block.text) });
 				} else if (block.type === "thinking" && block.thinking.trim()) {
+					if (sameProvider && !canReplayThinking) continue;
+
 					const sig = (block as ThinkingContent).thinkingSignature?.trim();
 					if (sig && sameProvider) {
 						// Pass thinking unsanitized — sanitizeSurrogates would mutate
@@ -780,32 +820,80 @@ export type ThinkingConfig =
 
 export type ThinkingEffort = "low" | "medium" | "high" | "xhigh" | "max";
 
-// Opus 4.7 introduced behaviors that every later Opus minor inherits: adaptive
-// thinking, "xhigh"/"max" reasoning effort, and rejection of non-default
-// sampling parameters. Centralize the version check so the call sites stay in sync.
-function isOpus47Plus(modelId: string): boolean {
-	return modelId.startsWith("claude-opus-4-7") || modelId.startsWith("claude-opus-4-8") || modelId.startsWith("claude-opus-5") || modelId.startsWith("claude-sonnet-5");
+function matchesModelFamily(modelId: string, family: string): boolean {
+	return modelId === family || modelId.startsWith(`${family}@`) || modelId.startsWith(`${family}-`);
+}
+
+function isFable51Model(modelId: string): boolean {
+	return matchesModelFamily(modelId, "claude-fable-5-1");
+}
+
+// Opus 4.7 introduced the shifted adaptive-effort scale inherited by newer
+// frontier models. Pi exposes minimal/low/medium/high/xhigh, while Anthropic's
+// scale is low/medium/high/xhigh/max, so these models shift each picker level.
+function usesShiftedAdaptiveEffort(modelId: string): boolean {
+	return (
+		matchesModelFamily(modelId, "claude-opus-4-7") ||
+		matchesModelFamily(modelId, "claude-opus-4-8") ||
+		matchesModelFamily(modelId, "claude-opus-5") ||
+		matchesModelFamily(modelId, "claude-sonnet-5") ||
+		isFable51Model(modelId)
+	);
 }
 
 function isAdaptiveThinkingModel(modelId: string): boolean {
-	return isOpus47Plus(modelId) || modelId.includes("opus-4-6") || modelId.includes("sonnet-4-6") || modelId.includes("sonnet-5");
+	return (
+		usesShiftedAdaptiveEffort(modelId) ||
+		matchesModelFamily(modelId, "claude-opus-4-6") ||
+		matchesModelFamily(modelId, "claude-sonnet-4-6")
+	);
 }
 
-// Opus 4.7+ rejects non-default sampling parameters (temperature/top_p/top_k)
-// with a 400 error. Matches oh-my-pi PR #728 hasOpus47ApiRestrictions and
-// needs to be stripped before the request is sent.
+// Fable 5.1 can consume thinking blocks from earlier Claude models, but its own
+// thinking blocks cannot be consumed by an earlier model. Omitting them matches
+// the API's documented input transformation and avoids sending unusable tokens.
+export function canReplayThinkingBlock(sourceModelId: string, targetModelId: string): boolean {
+	return !isFable51Model(sourceModelId) || isFable51Model(targetModelId);
+}
+
+// Newer adaptive models reject non-default sampling parameters
+// (temperature/top_p/top_k). Centralize the check so future request paths apply
+// the same compatibility rules.
+export function hasAdaptiveApiRestrictions(modelId: string): boolean {
+	return usesShiftedAdaptiveEffort(modelId);
+}
+
+/** @deprecated Use hasAdaptiveApiRestrictions; retained for extension consumers. */
 export function hasOpus47ApiRestrictions(modelId: string): boolean {
-	return isOpus47Plus(modelId);
+	return hasAdaptiveApiRestrictions(modelId);
+}
+
+// Apply restrictions that are easy for a generic request builder to violate.
+// Fable 5.1 always thinks before acting, so Anthropic rejects forced tool choice
+// (`any` or a named `tool`); auto/none remain valid.
+export function applyModelRequestRestrictions(modelId: string, params: MessageCreateParamsStreaming): void {
+	if (hasAdaptiveApiRestrictions(modelId)) {
+		delete params.temperature;
+		delete params.top_p;
+		delete params.top_k;
+	}
+
+	const toolChoice = params.tool_choice;
+	if (
+		isFable51Model(modelId) &&
+		toolChoice &&
+		(toolChoice.type === "any" || toolChoice.type === "tool")
+	) {
+		throw new Error(
+			"Claude Fable 5.1 does not support forced tool use. Use tool_choice type \"auto\" or \"none\".",
+		);
+	}
 }
 
 // Map a pi-ai reasoning level to the Anthropic adaptive-thinking `effort` value.
-//
-// SHORTCUT for Opus 4.7+: pi-ai exposes minimal/low/medium/high/xhigh, but
-// Anthropic's adaptive scale is low/medium/high/xhigh/max (no "minimal"). Shift
-// every pi-ai level up one tier so the picker's top slot reaches "max".
 // Opus/Sonnet 4.6 keep this fork's existing unshifted/capped mapping.
 export function mapReasoningToEffort(reasoning: string, modelId: string): ThinkingEffort {
-	if (isOpus47Plus(modelId)) {
+	if (usesShiftedAdaptiveEffort(modelId)) {
 		switch (reasoning) {
 			case "minimal":
 				return "low";
@@ -841,9 +929,9 @@ export function buildThinkingConfig(
 	modelId: string,
 	reasoning: string,
 	maxTokens: number,
-	thinkingBudgets?: Record<string, number>,
+	thinkingBudgets?: ThinkingBudgets,
 ): { thinking: ThinkingConfig; maxTokens: number; effort?: ThinkingEffort } {
-	// Newer Opus/Sonnet models use adaptive thinking. Anthropic silently changed
+	// Newer frontier models use adaptive thinking. Anthropic silently changed
 	// the default `display` to "omitted", which strips thinking text from the
 	// stream and corrupts tool_use partial_json delivery (TodoWrite "JSON parse
 	// error"). Pin display to "summarized" per pi-mono acbf8eca.
@@ -884,7 +972,7 @@ export function streamVertexClaude(
 	context: Context,
 	options?: SimpleStreamOptions,
 ): AssistantMessageEventStream {
-	const stream = new AssistantMessageEventStream();
+	const stream = createAssistantMessageEventStream();
 
 	(async () => {
 		const output: AssistantMessage = {
@@ -962,14 +1050,6 @@ export function streamVertexClaude(
 				params.temperature = options.temperature;
 			}
 
-			// Opus 4.7+ rejects non-default sampling parameters with a 400 error.
-			// Strip them unconditionally. Matches oh-my-pi PR #728.
-			if (hasOpus47ApiRestrictions(model.id)) {
-				delete params.temperature;
-				delete params.top_p;
-				delete params.top_k;
-			}
-
 			// Add tools if provided
 			if (context.tools && context.tools.length > 0) {
 				params.tools = convertTools(context.tools);
@@ -984,6 +1064,8 @@ export function streamVertexClaude(
 					params.output_config = { effort: result.effort };
 				}
 			}
+
+			applyModelRequestRestrictions(model.id, params);
 
 			// Start streaming. Own the SSE loop so malformed tool JSON or raw control
 			// characters in `partial_json` payloads can be repaired before parsing.
@@ -1138,7 +1220,7 @@ export default function (pi: ExtensionAPI) {
 		apiKey: `$${projectInfo.envVar}`, // Env var for detection
 		api: "vertex-claude-api", // Custom API identifier
 
-		models: VERTEX_CLAUDE_MODELS,
+		models: buildVertexClaudeModels(region),
 
 		streamSimple: streamVertexClaude,
 	});

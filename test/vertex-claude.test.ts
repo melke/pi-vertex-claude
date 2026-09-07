@@ -3,20 +3,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock(
-	"@earendil-works/pi-ai",
-	() => ({
-		calculateCost: () => undefined,
-		AssistantMessageEventStream: class {
-			push() {}
-			end() {}
-			[Symbol.asyncIterator]() {
-				return { next: async () => ({ done: true, value: undefined }) };
-			}
+vi.mock("@earendil-works/pi-ai", () => ({
+	calculateCost: () => undefined,
+	createAssistantMessageEventStream: () => ({
+		push() {},
+		end() {},
+		[Symbol.asyncIterator]() {
+			return { next: async () => ({ done: true, value: undefined }) };
 		},
 	}),
-	{ virtual: true },
-);
+}));
 
 let convertMessages: typeof import("../index.js").convertMessages;
 let convertTools: typeof import("../index.js").convertTools;
@@ -30,7 +26,12 @@ let iterateAnthropicEvents: typeof import("../index.js").iterateAnthropicEvents;
 let normalizeToolCallId: typeof import("../index.js").normalizeToolCallId;
 let synthesizeMissingToolResults: typeof import("../index.js").synthesizeMissingToolResults;
 let mapReasoningToEffort: typeof import("../index.js").mapReasoningToEffort;
+let hasAdaptiveApiRestrictions: typeof import("../index.js").hasAdaptiveApiRestrictions;
 let hasOpus47ApiRestrictions: typeof import("../index.js").hasOpus47ApiRestrictions;
+let applyModelRequestRestrictions: typeof import("../index.js").applyModelRequestRestrictions;
+let canReplayThinkingBlock: typeof import("../index.js").canReplayThinkingBlock;
+let buildVertexClaudeModels: typeof import("../index.js").buildVertexClaudeModels;
+let VERTEX_CLAUDE_MODELS: typeof import("../index.js").VERTEX_CLAUDE_MODELS;
 let readSettingsEnv: typeof import("../index.js").readSettingsEnv;
 let resolveSettingsEnv: typeof import("../index.js").resolveSettingsEnv;
 let validateVertexRegion: typeof import("../index.js").validateVertexRegion;
@@ -52,13 +53,38 @@ beforeAll(async () => {
 	normalizeToolCallId = helpers.normalizeToolCallId;
 	synthesizeMissingToolResults = helpers.synthesizeMissingToolResults;
 	mapReasoningToEffort = helpers.mapReasoningToEffort;
+	hasAdaptiveApiRestrictions = helpers.hasAdaptiveApiRestrictions;
 	hasOpus47ApiRestrictions = helpers.hasOpus47ApiRestrictions;
+	applyModelRequestRestrictions = helpers.applyModelRequestRestrictions;
+	canReplayThinkingBlock = helpers.canReplayThinkingBlock;
+	buildVertexClaudeModels = helpers.buildVertexClaudeModels;
+	VERTEX_CLAUDE_MODELS = helpers.VERTEX_CLAUDE_MODELS;
 	readSettingsEnv = helpers.readSettingsEnv;
 	resolveSettingsEnv = helpers.resolveSettingsEnv;
 	validateVertexRegion = helpers.validateVertexRegion;
 	resolveRegion = helpers.resolveRegion;
 	buildVertexBaseUrl = helpers.buildVertexBaseUrl;
 	buildSystemBlocks = helpers.buildSystemBlocks;
+});
+
+describe("Vertex Claude models", () => {
+	it("registers Claude Fable 5.1 with its Vertex limits and global pricing", () => {
+		const model = VERTEX_CLAUDE_MODELS.find(({ id }) => id === "claude-fable-5-1");
+		expect(model).toMatchObject({
+			name: "Claude Fable 5.1 (Vertex)",
+			reasoning: true,
+			input: ["text", "image"],
+			cost: { input: 10, output: 50, cacheRead: 0.25, cacheWrite: 12.5 },
+			contextWindow: 1_000_000,
+			maxTokens: 128_000,
+			thinking: { minLevel: "minimal", maxLevel: "xhigh" },
+		});
+	});
+
+	it("applies Vertex's regional pricing premium to the EU endpoint", () => {
+		const model = buildVertexClaudeModels("eu").find(({ id }) => id === "claude-fable-5-1");
+		expect(model?.cost).toEqual({ input: 11, output: 55, cacheRead: 0.275, cacheWrite: 13.75 });
+	});
 });
 
 describe("vertex-claude helpers", () => {
@@ -132,6 +158,21 @@ describe("vertex-claude helpers", () => {
 		expect(mapReasoningToEffort("xhigh", "claude-opus-4-8")).toBe("max");
 	});
 
+	it("uses always-on adaptive thinking and shifted effort for Fable 5.1", () => {
+		const result = buildThinkingConfig("claude-fable-5-1", "xhigh", 128_000);
+		expect(result.thinking).toEqual({ type: "adaptive", display: "summarized" });
+		expect(result.effort).toBe("max");
+		expect(result.maxTokens).toBe(128_000);
+	});
+
+	it("maps every pi-ai reasoning level onto Fable 5.1's low..max scale", () => {
+		expect(mapReasoningToEffort("minimal", "claude-fable-5-1")).toBe("low");
+		expect(mapReasoningToEffort("low", "claude-fable-5-1")).toBe("medium");
+		expect(mapReasoningToEffort("medium", "claude-fable-5-1")).toBe("high");
+		expect(mapReasoningToEffort("high", "claude-fable-5-1")).toBe("xhigh");
+		expect(mapReasoningToEffort("xhigh", "claude-fable-5-1")).toBe("max");
+	});
+
 	it("maps xhigh reasoning to effort=high on non-4.7+ models", () => {
 		// Opus/Sonnet 4.6 use adaptive thinking in this fork, but keep the
 		// existing capped effort mapping rather than the Opus 4.7+ shifted scale.
@@ -148,18 +189,52 @@ describe("vertex-claude helpers", () => {
 		expect(mapReasoningToEffort("bogus", "claude-opus-4-7")).toBe("xhigh");
 	});
 
-	it("flags Opus 4.7+ (and variants) as having sampling-param restrictions", () => {
-		expect(hasOpus47ApiRestrictions("claude-opus-4-7")).toBe(true);
-		expect(hasOpus47ApiRestrictions("claude-opus-4-7@20260115")).toBe(true);
-		expect(hasOpus47ApiRestrictions("claude-opus-4-8")).toBe(true);
-		expect(hasOpus47ApiRestrictions("claude-opus-4-8@20260528")).toBe(true);
+	it("flags newer adaptive models (and variants) as having sampling-param restrictions", () => {
+		expect(hasAdaptiveApiRestrictions("claude-opus-4-7")).toBe(true);
+		expect(hasAdaptiveApiRestrictions("claude-opus-4-7@20260115")).toBe(true);
+		expect(hasAdaptiveApiRestrictions("claude-opus-4-8-20260528")).toBe(true);
+		expect(hasAdaptiveApiRestrictions("claude-opus-5")).toBe(true);
+		expect(hasAdaptiveApiRestrictions("claude-sonnet-5")).toBe(true);
+		expect(hasAdaptiveApiRestrictions("claude-fable-5-1")).toBe(true);
+		// Backward-compatible alias remains available to extension consumers.
+		expect(hasOpus47ApiRestrictions("claude-fable-5-1")).toBe(true);
 	});
 
 	it("does not flag Opus 4.6 / Sonnet 4.6 / older models as restricted", () => {
-		expect(hasOpus47ApiRestrictions("claude-opus-4-6")).toBe(false);
-		expect(hasOpus47ApiRestrictions("claude-opus-4-6@20251101")).toBe(false);
-		expect(hasOpus47ApiRestrictions("claude-sonnet-4-6")).toBe(false);
-		expect(hasOpus47ApiRestrictions("claude-sonnet-4@20250514")).toBe(false);
+		expect(hasAdaptiveApiRestrictions("claude-opus-4-6")).toBe(false);
+		expect(hasAdaptiveApiRestrictions("claude-opus-4-6@20251101")).toBe(false);
+		expect(hasAdaptiveApiRestrictions("claude-sonnet-4-6")).toBe(false);
+		expect(hasAdaptiveApiRestrictions("claude-sonnet-4@20250514")).toBe(false);
+	});
+
+	it("strips sampling parameters for Fable 5.1", () => {
+		const params = {
+			model: "claude-fable-5-1",
+			messages: [],
+			max_tokens: 1024,
+			stream: true,
+			temperature: 0.5,
+			top_p: 0.9,
+			top_k: 10,
+		} as any;
+		applyModelRequestRestrictions("claude-fable-5-1", params);
+		expect(params.temperature).toBeUndefined();
+		expect(params.top_p).toBeUndefined();
+		expect(params.top_k).toBeUndefined();
+	});
+
+	it("rejects forced tool use for Fable 5.1 but permits auto and none", () => {
+		const params = (tool_choice: unknown) =>
+			({ model: "claude-fable-5-1", messages: [], max_tokens: 1024, stream: true, tool_choice }) as any;
+
+		expect(() => applyModelRequestRestrictions("claude-fable-5-1", params({ type: "any" }))).toThrow(
+			/does not support forced tool use/,
+		);
+		expect(() =>
+			applyModelRequestRestrictions("claude-fable-5-1", params({ type: "tool", name: "read_file" })),
+		).toThrow(/does not support forced tool use/);
+		expect(() => applyModelRequestRestrictions("claude-fable-5-1", params({ type: "auto" }))).not.toThrow();
+		expect(() => applyModelRequestRestrictions("claude-fable-5-1", params({ type: "none" }))).not.toThrow();
 	});
 
 	it("returns adaptive thinking for Opus 4.6", () => {
@@ -580,6 +655,47 @@ describe("convertMessages thinking block conversion", () => {
 		expect(assistant.content[0].text).not.toContain("<external-reasoning>");
 	});
 
+	it("drops Fable 5.1 thinking blocks when switching to an earlier Claude model", () => {
+		const messages = [
+			{ role: "user", content: "hi", timestamp: 0 },
+			{
+				role: "assistant",
+				api: "vertex-claude-api",
+				provider: "google-vertex-claude",
+				model: "claude-fable-5-1",
+				content: [
+					{ type: "thinking", thinking: "fable reasoning", thinkingSignature: "fable-sig" },
+					{ type: "text", text: "answer" },
+				],
+			},
+		];
+		const params = convertMessages(messages as any, vertexModel as any);
+		const assistant = params[1];
+		expect(assistant.content).toEqual([{ type: "text", text: "answer" }]);
+		expect(canReplayThinkingBlock("claude-fable-5-1", "claude-opus-4-7")).toBe(false);
+	});
+
+	it("preserves earlier Claude thinking when switching to Fable 5.1", () => {
+		const fableModel = { ...vertexModel, id: "claude-fable-5-1", name: "Claude Fable 5.1 (Vertex)" };
+		const messages = [
+			{ role: "user", content: "hi", timestamp: 0 },
+			{
+				role: "assistant",
+				api: "vertex-claude-api",
+				provider: "google-vertex-claude",
+				model: "claude-opus-5",
+				content: [{ type: "thinking", thinking: "opus reasoning", thinkingSignature: "opus-sig" }],
+			},
+		];
+		const params = convertMessages(messages as any, fableModel as any);
+		expect(params[1].content[0]).toEqual({
+			type: "thinking",
+			thinking: "opus reasoning",
+			signature: "opus-sig",
+		});
+		expect(canReplayThinkingBlock("claude-opus-5", "claude-fable-5-1")).toBe(true);
+	});
+
 	it("treats messages without api/provider metadata as foreign (defensive default)", () => {
 		const messages = [
 			{ role: "user", content: "hi", timestamp: 0 },
@@ -863,6 +979,10 @@ describe("Vertex region validation", () => {
 		]) {
 			expect(() => validateVertexRegion(region)).toThrow(/Invalid Vertex AI region/);
 		}
+	});
+
+	it("defaults to the EU multi-region endpoint", () => {
+		expect(resolveRegion({})).toBe("eu");
 	});
 
 	it("validates region values resolved from Claude settings", () => {
