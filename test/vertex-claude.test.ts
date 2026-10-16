@@ -1,3 +1,4 @@
+import type { Api } from "@earendil-works/pi-ai";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -68,6 +69,70 @@ beforeAll(async () => {
 });
 
 describe("Vertex Claude models", () => {
+	it.each([
+		["claude-opus-5-5", "Claude Opus 5.5 (Vertex)", { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 5 }],
+		["claude-sonnet-5-5", "Claude Sonnet 5.5 (Vertex)", { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5 }],
+		["claude-haiku-5-5", "Claude Haiku 5.5 (Vertex)", { input: 0.1, output: 0.5, cacheRead: 0.01, cacheWrite: 0.125 }],
+	])("registers %s with its Vertex limits and global pricing", (id, name, cost) => {
+		const model = VERTEX_CLAUDE_MODELS.find((model) => model.id === id);
+		expect(model).toMatchObject({
+			name,
+			reasoning: true,
+			input: ["text", "image"],
+			cost,
+			contextWindow: 1_000_000,
+			maxTokens: 128_000,
+			thinkingLevelMap: { minimal: "low", low: "medium", medium: "high", high: "xhigh", xhigh: "max" },
+			thinking: { minLevel: "minimal", maxLevel: "xhigh" },
+		});
+	});
+
+	it("advertises model-specific off settings for Claude 5.5", () => {
+		const offSettings = VERTEX_CLAUDE_MODELS.filter(({ id }) => id.endsWith("5-5"))
+			.map(({ id, thinkingLevelMap }) => [id, thinkingLevelMap?.off]);
+		expect(offSettings).toEqual([
+			["claude-opus-5-5", null],
+			["claude-sonnet-5-5", "between_tools"],
+			["claude-haiku-5-5", "disabled"],
+		]);
+	});
+
+	it("applies the regional premium to Haiku 5.5's base and long-context rates without mutating global prices", () => {
+		const model = buildVertexClaudeModels("eu").find(({ id }) => id === "claude-haiku-5-5");
+		expect(model?.cost).toEqual({
+			input: 0.11, output: 0.55, cacheRead: 0.011, cacheWrite: 0.1375,
+			tiers: [{ inputTokensAbove: 100_000, input: 0.55, output: 2.75, cacheRead: 0.055, cacheWrite: 0.6875 }],
+		});
+		expect(buildVertexClaudeModels("global").find(({ id }) => id === "claude-haiku-5-5")?.cost).toEqual({
+			input: 0.1, output: 0.5, cacheRead: 0.01, cacheWrite: 0.125,
+			tiers: [{ inputTokensAbove: 100_000, input: 0.5, output: 2.5, cacheRead: 0.05, cacheWrite: 0.625 }],
+		});
+	});
+
+	it.each([
+		["global", 100_000, 0, 0, 0.1, 0.5],
+		["global", 100_001, 0, 0, 0.5, 2.5],
+		["global", 99_999, 1, 0, 0.1, 0.5],
+		["global", 99_999, 1, 1, 0.5, 2.5],
+		["eu", 100_000, 0, 0, 0.11, 0.55],
+		["eu", 100_001, 0, 0, 0.55, 2.75],
+	] as const)("calculates Haiku 5.5 pricing for %s with %i input, %i cache read, and %i cache write tokens", async (
+		region, input, cacheRead, cacheWrite, inputRate, outputRate,
+	) => {
+		const { calculateCost } = await vi.importActual<typeof import("@earendil-works/pi-ai")>("@earendil-works/pi-ai");
+		const model = buildVertexClaudeModels(region).find(({ id }) => id === "claude-haiku-5-5")!;
+		const usage = {
+			input, output: 1000, cacheRead, cacheWrite,
+			totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		};
+		calculateCost<Api>({ ...model, api: "vertex-claude-api", provider: "google-vertex-claude", baseUrl: "" }, usage);
+		expect(usage.cost.input).toBeCloseTo(input * inputRate / 1_000_000, 12);
+		expect(usage.cost.output).toBeCloseTo(1000 * outputRate / 1_000_000, 12);
+		const rates = input + cacheRead + cacheWrite > 100_000 ? model.cost.tiers![0] : model.cost;
+		expect(usage.cost.cacheRead).toBeCloseTo(cacheRead * rates.cacheRead / 1_000_000, 12);
+		expect(usage.cost.cacheWrite).toBeCloseTo(cacheWrite * rates.cacheWrite / 1_000_000, 12);
+	});
+
 	it("registers Claude Fable 5.1 with its Vertex limits and global pricing", () => {
 		const model = VERTEX_CLAUDE_MODELS.find(({ id }) => id === "claude-fable-5-1");
 		expect(model).toMatchObject({
@@ -132,6 +197,59 @@ describe("vertex-claude helpers", () => {
 
 		expect(lastBlock.type).toBe("tool_result");
 		expect(lastBlock.cache_control).toEqual({ type: "ephemeral" });
+	});
+
+	it.each(["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"])(
+		"uses adaptive thinking with the full effort range for %s and its variants",
+		(family) => {
+			for (const modelId of [family, `${family}@default`, `${family}@20261007`, `${family}-20261007`]) {
+				for (const [reasoning, effort] of Object.entries({ minimal: "low", low: "medium", medium: "high", high: "xhigh", xhigh: "max" })) {
+					expect(buildThinkingConfig(modelId, reasoning, 64_000, { high: 2048 })).toEqual({
+						thinking: { type: "adaptive", display: "summarized" }, maxTokens: 64_000, effort,
+					});
+					expect(hasAdaptiveApiRestrictions(modelId)).toBe(true);
+				}
+			}
+		},
+	);
+
+	it.each([
+		["claude-opus-5-5", { type: "adaptive", display: "summarized" }],
+		["claude-sonnet-5-5", { type: "between_tools" }],
+		["claude-haiku-5-5", { type: "disabled" }],
+	] as const)("uses the valid lowest thinking setting for %s", (modelId, thinking) => {
+		expect(buildThinkingConfig(modelId, "off", 4096)).toEqual({ thinking, maxTokens: 4096 });
+	});
+
+	it.each(["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"])("strips sampling parameters for %s", (modelId) => {
+		const params = { model: modelId, messages: [], max_tokens: 1024, stream: true, temperature: 0.5, top_p: 0.9, top_k: 10 } as any;
+		applyModelRequestRestrictions(modelId, params);
+		expect(params).not.toHaveProperty("temperature");
+		expect(params).not.toHaveProperty("top_p");
+		expect(params).not.toHaveProperty("top_k");
+	});
+
+	it.each(["claude-opus-5-5", "claude-sonnet-5-5"])("rejects forced tool use for %s and its variants", (modelId) => {
+		for (const id of [modelId, `${modelId}@default`, `${modelId}-20261007`]) {
+			for (const tool_choice of [{ type: "any" }, { type: "tool", name: "read_file" }]) {
+				expect(() => applyModelRequestRestrictions(id, { tool_choice } as any)).toThrow(/does not support forced tool use/);
+			}
+			for (const tool_choice of [undefined, { type: "auto" }, { type: "none" }]) {
+				expect(() => applyModelRequestRestrictions(id, { tool_choice } as any)).not.toThrow();
+			}
+		}
+	});
+
+	it("permits forced tool use for Haiku 5.5", () => {
+		for (const tool_choice of [{ type: "any" }, { type: "tool", name: "read_file" }]) {
+			expect(() => applyModelRequestRestrictions("claude-haiku-5-5", { tool_choice } as any)).not.toThrow();
+		}
+	});
+
+	it("does not apply Claude 5.5 handling to similarly named models", () => {
+		for (const id of ["claude-haiku-5", "claude-haiku-5-50", "other-claude-haiku-5-5"]) {
+			expect(hasAdaptiveApiRestrictions(id)).toBe(false);
+		}
 	});
 
 	it("returns adaptive thinking with display=summarized and shifted effort for Opus 4.7", () => {
@@ -572,6 +690,75 @@ describe("convertMessages thinking block conversion", () => {
 			thinking: "reasoning here",
 			signature: "abc123",
 		});
+	});
+
+	it.each(["", "   "])("preserves signed thinking with empty or whitespace display text (%j)", (thinking) => {
+		const model = { ...vertexModel, id: "claude-opus-5-5" };
+		const messages = [
+			{ role: "user", content: "hi" },
+			{
+				role: "assistant", api: model.api, provider: model.provider, model: model.id,
+				content: [
+					{ type: "thinking", thinking, thinkingSignature: "reasoning-sig" },
+					{ type: "thinking", thinking: "checking the file", thinkingSignature: "progress-sig" },
+					{ type: "toolCall", id: "call_1", name: "read_file", arguments: { path: "README.md" } },
+				],
+			},
+			{ role: "toolResult", toolCallId: "call_1", content: [{ type: "text", text: "contents" }] },
+		];
+		expect(convertMessages(messages as any, model as any)[1].content).toEqual([
+			{ type: "thinking", thinking, signature: "reasoning-sig" },
+			{ type: "thinking", thinking: "checking the file", signature: "progress-sig" },
+			{ type: "tool_use", id: "call_1", name: "read_file", input: { path: "README.md" } },
+		]);
+	});
+
+	it.each([
+		["claude-opus-5-5", "claude-opus-5-5", true],
+		["claude-opus-5-5@default", "claude-opus-5-5-20260922", true],
+		["claude-opus-5-5", "claude-sonnet-5-5", false],
+		["claude-opus-5-5", "claude-haiku-5-5", false],
+		["claude-opus-5-5", "claude-opus-5", false],
+		["claude-opus-5-5", "claude-fable-5-1", false],
+		["claude-sonnet-5-5", "claude-opus-5-5", true],
+		["claude-sonnet-5-5", "claude-sonnet-5-5", true],
+		["claude-sonnet-5-5", "claude-haiku-5-5", false],
+		["claude-sonnet-5-5", "claude-sonnet-5", false],
+		["claude-sonnet-5-5", "claude-fable-5-1", false],
+		["claude-haiku-5-5", "claude-opus-5-5", true],
+		["claude-haiku-5-5", "claude-sonnet-5-5", true],
+		["claude-haiku-5-5", "claude-haiku-5-5", true],
+		["claude-haiku-5-5", "claude-haiku-4-5@20251001", false],
+		["claude-haiku-5-5", "claude-fable-5-1", false],
+		["claude-opus-5", "claude-opus-5-5", true],
+		["claude-opus-5", "claude-sonnet-5-5", false],
+		["claude-opus-5", "claude-haiku-5-5", false],
+		["claude-sonnet-5", "claude-sonnet-5-5", true],
+		["claude-sonnet-5", "claude-haiku-5-5", true],
+		["claude-opus-4-8", "claude-haiku-5-5", true],
+		["claude-haiku-4-5@20251001", "claude-haiku-5-5", true],
+		["claude-fable-5-1", "claude-opus-5-5", false],
+		["claude-fable-5-1", "claude-sonnet-5-5", false],
+		["claude-fable-5-1", "claude-haiku-5-5", false],
+	] as const)("handles Vertex thinking replay from %s to %s (readable=%s)", (source, target, readable) => {
+		expect(canReplayThinkingBlock(source, target)).toBe(readable);
+		const messages = [
+			{ role: "user", content: "hi" },
+			{
+				role: "assistant", api: vertexModel.api, provider: vertexModel.provider, model: source,
+				content: [
+					{ type: "thinking", thinking: "reasoning", thinkingSignature: "sig" },
+					{ type: "text", text: "answer" },
+				],
+			},
+		];
+		const assistant = convertMessages(messages as any, { ...vertexModel, id: target } as any)[1];
+		expect(assistant.content).toEqual([
+			...(readable ? [{ type: "thinking", thinking: "reasoning", signature: "sig" }] : []),
+			{ type: "text", text: "answer" },
+		]);
+		// Converting a request must never discard reasoning from stored history.
+		expect(messages[1].content).toHaveLength(2);
 	});
 
 	it("does not sanitize thinking content when signature is preserved", () => {

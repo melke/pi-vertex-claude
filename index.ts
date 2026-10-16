@@ -18,13 +18,13 @@
  *      so that template can drive this plugin without exporting env vars.
  *
  * Usage:
- *   pi --provider google-vertex-claude --model claude-fable-5-1
+ *   pi --provider google-vertex-claude --model claude-opus-5-5
  *
  * Or add to your shell config:
  *   function piv
  *     set -x GOOGLE_CLOUD_PROJECT your-project-id
  *     set -x GOOGLE_CLOUD_LOCATION eu
- *     pi --provider google-vertex-claude --model claude-fable-5-1 $argv
+ *     pi --provider google-vertex-claude --model claude-opus-5-5 $argv
  *   end
  */
 
@@ -60,13 +60,62 @@ import { join } from "node:path";
 import { parse as partialParse } from "partial-json";
 
 // =============================================================================
-// Models from models.dev google-vertex-anthropic
+// Model IDs and limits: https://platform.claude.com/docs/en/build-with-claude/claude-on-vertex-ai
 // Pricing from: https://cloud.google.com/vertex-ai/generative-ai/pricing#partner-models
 // =============================================================================
 
+type VertexClaudeModel = Omit<Model<Api>, "api" | "provider" | "baseUrl"> & {
+	// Retain range metadata for Pi forks that use it instead of thinkingLevelMap.
+	thinking?: { minLevel: "minimal"; maxLevel: "xhigh" };
+};
+
+const SHIFTED_THINKING_LEVEL_MAP = {
+	minimal: "low",
+	low: "medium",
+	medium: "high",
+	high: "xhigh",
+	xhigh: "max",
+};
+
 // Base prices are for the global endpoint. buildVertexClaudeModels applies
 // Google's regional 10% premium when another endpoint is selected.
-export const VERTEX_CLAUDE_MODELS = [
+export const VERTEX_CLAUDE_MODELS: VertexClaudeModel[] = [
+	{
+		id: "claude-opus-5-5",
+		name: "Claude Opus 5.5 (Vertex)",
+		reasoning: true,
+		input: ["text", "image"],
+		cost: { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 5 },
+		contextWindow: 1000000,
+		maxTokens: 128000,
+		thinkingLevelMap: { ...SHIFTED_THINKING_LEVEL_MAP, off: null },
+		thinking: { minLevel: "minimal", maxLevel: "xhigh" },
+	},
+	{
+		id: "claude-sonnet-5-5",
+		name: "Claude Sonnet 5.5 (Vertex)",
+		reasoning: true,
+		input: ["text", "image"],
+		cost: { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5 },
+		contextWindow: 1000000,
+		maxTokens: 128000,
+		thinkingLevelMap: { ...SHIFTED_THINKING_LEVEL_MAP, off: "between_tools" },
+		thinking: { minLevel: "minimal", maxLevel: "xhigh" },
+	},
+	{
+		id: "claude-haiku-5-5",
+		name: "Claude Haiku 5.5 (Vertex)",
+		reasoning: true,
+		input: ["text", "image"],
+		cost: {
+			input: 0.1, output: 0.5, cacheRead: 0.01, cacheWrite: 0.125,
+			tiers: [{ inputTokensAbove: 100000, input: 0.5, output: 2.5, cacheRead: 0.05, cacheWrite: 0.625 }],
+		},
+		contextWindow: 1000000,
+		maxTokens: 128000,
+		thinkingLevelMap: { ...SHIFTED_THINKING_LEVEL_MAP, off: "disabled" },
+		thinking: { minLevel: "minimal", maxLevel: "xhigh" },
+	},
 	{
 		id: "claude-fable-5-1",
 		name: "Claude Fable 5.1 (Vertex)",
@@ -181,6 +230,15 @@ export function buildVertexClaudeModels(region: string): typeof VERTEX_CLAUDE_MO
 			output: regionalPrice(model.cost.output),
 			cacheRead: regionalPrice(model.cost.cacheRead),
 			cacheWrite: regionalPrice(model.cost.cacheWrite),
+			...(model.cost.tiers && {
+				tiers: model.cost.tiers.map((tier) => ({
+					inputTokensAbove: tier.inputTokensAbove,
+					input: regionalPrice(tier.input),
+					output: regionalPrice(tier.output),
+					cacheRead: regionalPrice(tier.cacheRead),
+					cacheWrite: regionalPrice(tier.cacheWrite),
+				})),
+			}),
 		},
 	}));
 }
@@ -447,9 +505,8 @@ export function convertMessages(messages: Message[], model: Model<Api>): any[] {
 			// a 400 "Invalid signature in thinking block". Gate signature passthrough
 			// on api+provider match; for foreign turns, drop the signature and wrap
 			// the thinking content so Claude reads it as external context rather
-			// than its own private reasoning. Fable 5.1 thinking is also one-way:
-			// Fable can read earlier Claude thinking, but earlier models cannot read
-			// Fable 5.1 blocks, so omit those blocks when switching back.
+			// than its own private reasoning. Also omit model-bound blocks the
+			// target cannot read, without modifying the stored conversation.
 			const sameProvider = msg.api === model.api && msg.provider === model.provider;
 			const canReplayThinking =
 				typeof msg.model === "string" && canReplayThinkingBlock(msg.model, model.id);
@@ -457,10 +514,10 @@ export function convertMessages(messages: Message[], model: Model<Api>): any[] {
 			for (const block of msg.content) {
 				if (block.type === "text" && block.text.trim()) {
 					blocks.push({ type: "text", text: sanitizeSurrogates(block.text) });
-				} else if (block.type === "thinking" && block.thinking.trim()) {
+				} else if (block.type === "thinking") {
 					if (sameProvider && !canReplayThinking) continue;
 
-					const sig = (block as ThinkingContent).thinkingSignature?.trim();
+					const sig = (block as ThinkingContent).thinkingSignature;
 					if (sig && sameProvider) {
 						// Pass thinking unsanitized — sanitizeSurrogates would mutate
 						// the signed bytes and invalidate the signature.
@@ -469,6 +526,8 @@ export function convertMessages(messages: Message[], model: Model<Api>): any[] {
 							thinking: block.thinking,
 							signature: sig,
 						});
+					} else if (!block.thinking.trim()) {
+						continue;
 					} else if (sameProvider) {
 						blocks.push({ type: "text", text: sanitizeSurrogates(block.thinking) });
 					} else {
@@ -816,7 +875,9 @@ export type ThinkingDisplay = "summarized" | "omitted";
 
 export type ThinkingConfig =
 	| { type: "adaptive"; display: ThinkingDisplay }
-	| { type: "enabled"; budget_tokens: number; display: ThinkingDisplay };
+	| { type: "enabled"; budget_tokens: number; display: ThinkingDisplay }
+	| { type: "between_tools" }
+	| { type: "disabled" };
 
 export type ThinkingEffort = "low" | "medium" | "high" | "xhigh" | "max";
 
@@ -828,11 +889,20 @@ function isFable51Model(modelId: string): boolean {
 	return matchesModelFamily(modelId, "claude-fable-5-1");
 }
 
+const CLAUDE_55_MODEL_FAMILIES = ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"] as const;
+
+function isClaude55Model(modelId: string): boolean {
+	return CLAUDE_55_MODEL_FAMILIES.some((family) =>
+		matchesModelFamily(modelId, family),
+	);
+}
+
 // Opus 4.7 introduced the shifted adaptive-effort scale inherited by newer
 // frontier models. Pi exposes minimal/low/medium/high/xhigh, while Anthropic's
 // scale is low/medium/high/xhigh/max, so these models shift each picker level.
 function usesShiftedAdaptiveEffort(modelId: string): boolean {
 	return (
+		isClaude55Model(modelId) ||
 		matchesModelFamily(modelId, "claude-opus-4-7") ||
 		matchesModelFamily(modelId, "claude-opus-4-8") ||
 		matchesModelFamily(modelId, "claude-opus-5") ||
@@ -849,10 +919,24 @@ function isAdaptiveThinkingModel(modelId: string): boolean {
 	);
 }
 
-// Fable 5.1 can consume thinking blocks from earlier Claude models, but its own
-// thinking blocks cannot be consumed by an earlier model. Omitting them matches
-// the API's documented input transformation and avoids sending unusable tokens.
+// Vertex's model-bound thinking compatibility is directional. In particular,
+// Fable can read Opus 5.5 blocks on the Claude API, but not on Vertex.
+// https://platform.claude.com/docs/en/build-with-claude/preserved-thinking#switching-models
 export function canReplayThinkingBlock(sourceModelId: string, targetModelId: string): boolean {
+	const sourceFamily = CLAUDE_55_MODEL_FAMILIES.find((family) => matchesModelFamily(sourceModelId, family));
+	if (sourceFamily) {
+		if (matchesModelFamily(targetModelId, sourceFamily)) return true;
+		if (sourceFamily === "claude-haiku-5-5") return isClaude55Model(targetModelId);
+		return sourceFamily === "claude-sonnet-5-5" && matchesModelFamily(targetModelId, "claude-opus-5-5");
+	}
+	if (isClaude55Model(targetModelId)) {
+		if (matchesModelFamily(sourceModelId, "claude-fable") || matchesModelFamily(sourceModelId, "claude-mythos")) {
+			return false;
+		}
+		if (!matchesModelFamily(targetModelId, "claude-opus-5-5") && matchesModelFamily(sourceModelId, "claude-opus-5")) {
+			return false;
+		}
+	}
 	return !isFable51Model(sourceModelId) || isFable51Model(targetModelId);
 }
 
@@ -869,8 +953,8 @@ export function hasOpus47ApiRestrictions(modelId: string): boolean {
 }
 
 // Apply restrictions that are easy for a generic request builder to violate.
-// Fable 5.1 always thinks before acting, so Anthropic rejects forced tool choice
-// (`any` or a named `tool`); auto/none remain valid.
+// Fable 5.1, Opus 5.5, and Sonnet 5.5 reject forced tool choice
+// (`any` or a named `tool`); auto/none remain valid. Haiku 5.5 permits it.
 export function applyModelRequestRestrictions(modelId: string, params: MessageCreateParamsStreaming): void {
 	if (hasAdaptiveApiRestrictions(modelId)) {
 		delete params.temperature;
@@ -880,12 +964,14 @@ export function applyModelRequestRestrictions(modelId: string, params: MessageCr
 
 	const toolChoice = params.tool_choice;
 	if (
-		isFable51Model(modelId) &&
+		(isFable51Model(modelId) ||
+			matchesModelFamily(modelId, "claude-opus-5-5") ||
+			matchesModelFamily(modelId, "claude-sonnet-5-5")) &&
 		toolChoice &&
 		(toolChoice.type === "any" || toolChoice.type === "tool")
 	) {
 		throw new Error(
-			"Claude Fable 5.1 does not support forced tool use. Use tool_choice type \"auto\" or \"none\".",
+			`${modelId} does not support forced tool use. Use tool_choice type "auto" or "none".`,
 		);
 	}
 }
@@ -931,6 +1017,17 @@ export function buildThinkingConfig(
 	maxTokens: number,
 	thinkingBudgets?: ThinkingBudgets,
 ): { thinking: ThinkingConfig; maxTokens: number; effort?: ThinkingEffort } {
+	if (reasoning === "off" && isClaude55Model(modelId)) {
+		if (matchesModelFamily(modelId, "claude-sonnet-5-5")) {
+			return { thinking: { type: "between_tools" }, maxTokens };
+		}
+		if (matchesModelFamily(modelId, "claude-haiku-5-5")) {
+			return { thinking: { type: "disabled" }, maxTokens };
+		}
+		// Opus 5.5 cannot disable thinking; preserve its default medium effort.
+		return { thinking: { type: "adaptive", display: "summarized" }, maxTokens };
+	}
+
 	// Newer frontier models use adaptive thinking. Anthropic silently changed
 	// the default `display` to "omitted", which strips thinking text from the
 	// stream and corrupts tool_use partial_json delivery (TodoWrite "JSON parse
@@ -950,7 +1047,7 @@ export function buildThinkingConfig(
 		high: 20480,
 		xhigh: 32768,
 	};
-	const budgetKey = reasoning === "xhigh" ? "high" : reasoning;
+	const budgetKey = (reasoning === "xhigh" ? "high" : reasoning) as keyof ThinkingBudgets;
 	const customBudget = thinkingBudgets?.[budgetKey];
 	const thinkingBudget = customBudget ?? defaultBudgets[reasoning] ?? 10240;
 
@@ -1056,8 +1153,10 @@ export function streamVertexClaude(
 			}
 
 			// Handle thinking/reasoning
-			if (options?.reasoning && model.reasoning) {
-				const result = buildThinkingConfig(model.id, options.reasoning, params.max_tokens, options.thinkingBudgets);
+			if (model.reasoning && (options?.reasoning || isClaude55Model(model.id))) {
+				const result = buildThinkingConfig(
+					model.id, options?.reasoning ?? "off", params.max_tokens, options?.thinkingBudgets,
+				);
 				params.thinking = result.thinking;
 				params.max_tokens = result.maxTokens;
 				if (result.effort) {

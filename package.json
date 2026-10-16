@@ -39,8 +39,8 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.124.0",
-    "@anthropic-ai/vertex-sdk": "^0.19.7",
+    "@anthropic-ai/sdk": "^0.135.0",
+    "@anthropic-ai/vertex-sdk": "^0.21.0",
     "partial-json": "^0.1.7"
   },
   "peerDependencies": {
