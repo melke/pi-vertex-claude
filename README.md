@@ -105,6 +105,7 @@ Haiku 5.5 costs $0.10 input / $0.50 output per million tokens for prompts up to 
 
 ## Prerequisites
 
+- Pi 1.3.0 or newer (the provider reads prompts and tools from transcript system messages)
 - Google Cloud project with Vertex AI API enabled
 - Claude models enabled in [Model Garden](https://console.cloud.google.com/vertex-ai/model-garden)
 - `gcloud` CLI installed

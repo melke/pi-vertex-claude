@@ -39,8 +39,10 @@ import {
 	type AssistantMessage,
 	type AssistantMessageEventStream,
 	calculateCost,
+	collapseSystemMessages,
 	createAssistantMessageEventStream,
-	type Context,
+	getCurrentSystemPrompt,
+	getCurrentTools,
 	type ImageContent,
 	type Message,
 	type Model,
@@ -52,6 +54,7 @@ import {
 	type Tool,
 	type ToolCall,
 	type ToolResultMessage,
+	type TranscriptContext,
 } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { existsSync, readFileSync } from "node:fs";
@@ -1066,7 +1069,7 @@ export function buildThinkingConfig(
 
 export function streamVertexClaude(
 	model: Model<Api>,
-	context: Context,
+	context: TranscriptContext,
 	options?: SimpleStreamOptions,
 ): AssistantMessageEventStream {
 	const stream = createAssistantMessageEventStream();
@@ -1091,6 +1094,12 @@ export function streamVertexClaude(
 		};
 
 		try {
+			// Vertex accepts one top-level system prompt and tool list. Resolve the
+			// transcript's system-message updates before building that request.
+			const transcript = collapseSystemMessages(context);
+			const systemPrompt = getCurrentSystemPrompt(transcript.messages);
+			const tools = getCurrentTools(transcript.messages);
+
 			// Resolve config from process.env, then .claude/settings.local.json,
 			// then ~/.claude/settings.json. Lets `claude-code-templates --setting=api/vertex-configuration`
 			// drive the plugin without exporting env vars in the shell.
@@ -1130,14 +1139,13 @@ export function streamVertexClaude(
 			// Build request params
 			const params: MessageCreateParamsStreaming = {
 				model: model.id,
-				messages: convertMessages(context.messages, model),
+				messages: convertMessages(transcript.messages, model),
 				max_tokens: options?.maxTokens || Math.floor(model.maxTokens / 3),
 				stream: true,
 			};
 
-			// Add system prompt with cache control. Handles both legacy `string`
-			// and newer/forked `string[]` shapes for context.systemPrompt.
-			const systemBlocks = buildSystemBlocks(context.systemPrompt);
+			// Add the resolved system prompt with cache control.
+			const systemBlocks = buildSystemBlocks(systemPrompt);
 			if (systemBlocks) {
 				params.system = systemBlocks;
 			}
@@ -1148,8 +1156,8 @@ export function streamVertexClaude(
 			}
 
 			// Add tools if provided
-			if (context.tools && context.tools.length > 0) {
-				params.tools = convertTools(context.tools);
+			if (tools.length > 0) {
+				params.tools = convertTools(tools);
 			}
 
 			// Handle thinking/reasoning

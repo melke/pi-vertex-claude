@@ -37,11 +37,12 @@ describe.skipIf(!shouldRun)("Vertex Claude integration (ADC)", () => {
 			maxTokens: 128000,
 		} as const;
 
-		const context = {
-			messages: [{ role: "user", content: "Say hello in one sentence." }],
-		};
+		const { normalizeContext } = await import("@earendil-works/pi-ai");
+		const context = normalizeContext({
+			messages: [{ role: "user", content: "Say hello in one sentence.", timestamp: 0 }],
+		});
 
-		const stream = streamVertexClaude(model as any, context as any, { maxTokens: 64 });
+		const stream = streamVertexClaude(model as any, context, { maxTokens: 64 });
 		let sawDone = false;
 
 		for await (const event of stream) {

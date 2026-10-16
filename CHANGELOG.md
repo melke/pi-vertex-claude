@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Explicit Opus 4.7/4.8 thinking metadata and shifted adaptive effort mapping so the top UI effort reaches Anthropic's `max` effort.
 
 ### Fixed
+- Read system prompts and tool declarations from Pi's normalized transcript instead of the removed provider-context fields, restoring coding-agent instructions, repository context, and tool access. Collapse later system updates into Vertex's top-level prompt and tool list.
 - Apply Claude 5.5 sampling restrictions, reject forced tool use on Opus/Sonnet 5.5, and respect Vertex's directional thinking-block compatibility when switching models.
 - Preserve signed thinking blocks even when their display text is empty or whitespace-only, as required by current Claude tool-use loops.
 - Apply Fable 5.1 request restrictions: strip unsupported sampling parameters, reject forced tool choices, and omit its one-way thinking blocks when switching back to an earlier Claude model.
@@ -25,6 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Validate Vertex AI region values and pass an explicit Google Vertex base URL to prevent malicious env/settings values from redirecting requests off `googleapis.com`.
 
 ### Changed
+- Require Pi AI and coding-agent 1.3.x or later compatible 1.x releases for the transcript-based provider API; update the development lockfile accordingly.
 - Use Opus 5.5 in usage examples and Haiku 5.5 in the optional ADC integration smoke test; keep all previously registered models available.
 - Default Vertex requests to the EU multi-region endpoint (`eu`) when no location is configured, and apply Google's regional 10% premium to displayed model costs outside the global endpoint.
 - Switch Pi peer dependencies/imports from deprecated `@mariozechner/*` packages to `@earendil-works/*`.

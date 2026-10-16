@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@earendil-works/pi-ai", () => ({
+vi.mock("@earendil-works/pi-ai", async (importOriginal) => ({
+	...await importOriginal<typeof import("@earendil-works/pi-ai")>(),
 	calculateCost: () => undefined,
 	createAssistantMessageEventStream: () => ({
 		push() {},
